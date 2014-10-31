@@ -15,10 +15,12 @@ class Sender(BasicSender.BasicSender):
 
     MAX_DATA_SIZE = 1472
     WINDOW_SIZE = 5
+    TIMEOUT = 0.5
 
     def __init__(self, dest, port, filename, debug=False, sackMode=False):
         super(Sender, self).__init__(dest, port, filename, debug)
         self.window = []
+        self.dup_ack = None
         if sackMode:
             raise NotImplementedError #remove this line when you implement SACK
 
@@ -30,12 +32,33 @@ class Sender(BasicSender.BasicSender):
             msg_type = 'end'
         return msg_type
 
-
     # according to the spec:
     # this leaves 1472 bytes for your entire packet (message type, sequence number, data, and checksum)
     # yet I tried it and then the size of data packet is under 1500, but still a little off
     def calculate_data_size(self, seqno):
         return Sender.MAX_DATA_SIZE - sys.getsizeof(seqno) - sys.getsizeof('start') - sys.getsizeof(Checksum.generate_checksum('0xffffffff'))
+
+    def packets_in_flight(self):
+        return [elem[0] for elem in self.window]
+
+    def get_ack_seq(self, ack):
+        return self.split_packet(ack)[1]
+
+    def is_seq_in_flight(self, ack_seq):
+        return ack_seq in [self.split_packet(x)[1] for x in self.packets_in_flight()]
+
+    def get_first_elem_ack(self):
+        first_packet = self.get_first_packet_in_flight()
+        return self.get_ack_seq(first_packet)
+
+    def get_first_packet_in_flight(self):
+        return self.window[0][0]
+
+    def get_dup_count(self):
+        return self.dup_ack[1]
+
+    def get_dup_seq(self):
+        return self.dup_ack[0]
 
     # Main sending loop.
     def start(self):
@@ -45,20 +68,22 @@ class Sender(BasicSender.BasicSender):
         msg = self.infile.read(data_size)
         msg_type = None
 
+        # populating the window
         while seqno < self.WINDOW_SIZE and msg_type != 'end':
             data_size = self.calculate_data_size(seqno + 1)
             next_msg = self.infile.read(data_size)
             msg_type = self.get_message_type(seqno, next_msg)
             packet = self.make_packet(msg_type, seqno, msg)
             self.send(packet)
-            self.window.append(packet)
+            # (packet, is_acked) note that is_acked is a boolean indicating whether this packet has been acked
+            self.window.append((packet, False))
             msg = next_msg
             seqno += 1
 
+
         while len(self.window) > 0:
-            response = self.receive(0.5)
+            response = self.receive(self.TIMEOUT)
             self.handle_response(response)
-            
             if msg_type != 'end':
                 while msg_type != 'end' and len(self.window) < self.WINDOW_SIZE:
                     data_size = self.calculate_data_size(seqno + 1)
@@ -66,38 +91,42 @@ class Sender(BasicSender.BasicSender):
                     msg_type = self.get_message_type(seqno, next_msg)
                     packet = self.make_packet(msg_type, seqno, msg)
                     self.send(packet)
-                    self.window.append(packet)
+                    self.window.append((packet, False))
                     msg = next_msg
                     seqno += 1
         self.infile.close()
 
-
     def handle_response(self, response):
         if response:
-            # !!!!check the sequence number
-            return self.handle_new_ack(response)
+            if not self.dup_ack or self.get_dup_seq() != self.get_ack_seq(response):
+                self.dup_ack = (self.get_ack_seq(response), 1)
+                self.handle_new_ack(response)
+            else:
+                self.dup_ack = (self.get_ack_seq(response), self.dup_ack[1] + 1)
+                self.handle_dup_ack(response)
         else:
             # send everything in the window if it's a timeout
             self.handle_timeout()
-            return False
 
     def handle_timeout(self):
-        for packet in self.window:
+        for packet in self.packets_in_flight():
                 self.send(packet)
 
     def handle_new_ack(self, ack):
-        # return msg_type, seqno, data, checksum
         msg_type = self.split_packet(ack)[0]
-        if not Checksum.validate_checksum(ack) and msg_type != 'ack':
-            return False
-        else:
-            ack_seq = str(int(self.split_packet(ack)[1]) - 1)
-            if ack_seq in [self.split_packet(x)[1] for x in self.window]:
-                while len(self.window) > 0 and int(self.split_packet(self.window[0])[1]) <= int(ack_seq):
+        if Checksum.validate_checksum(ack) and msg_type == 'ack':
+            ack_seq = self.get_ack_seq(ack)
+            # for easier computation
+            ack_seq = str(int(ack_seq) - 1)
+            if self.is_seq_in_flight(ack_seq):
+                while len(self.window) > 0 and int(self.get_first_elem_ack()) <= int(ack_seq):
                     self.window.pop(0)
 
+    # fast retransmission only occurs at the fourth packet
+    # only timeout will retransmit the packets after this point
     def handle_dup_ack(self, ack):
-        pass
+        if self.get_dup_count() == 4:
+            self.send(self.get_first_packet_in_flight)
 
     def log(self, msg):
         if self.debug:
