@@ -8,6 +8,10 @@ import BasicSender
 This is a skeleton sender class. Create a fantastic transport protocol here.
 '''
 class Sender(BasicSender.BasicSender):
+    # stdin TA said might not be in the test at all
+    # when working with SACK, pay attention to both cum_ack and specific ack
+    # -> out of range error ??
+    # use attribute or Sender to check if it's in SACK mode or not from an ACK (on top of enableing the option)
 
     MAX_DATA_SIZE = 1472
     WINDOW_SIZE = 5
@@ -26,19 +30,28 @@ class Sender(BasicSender.BasicSender):
             msg_type = 'end'
         return msg_type
 
+
+    # according to the spec:
+    # this leaves 1472 bytes for your entire packet (message type, sequence number, data, and checksum)
+    # yet I tried it and then the size of data packet is under 1500, but still a little off
+    def calculate_data_size(self, seqno):
+        return Sender.MAX_DATA_SIZE - sys.getsizeof(seqno) - sys.getsizeof('start') - sys.getsizeof(Checksum.generate_checksum('0xffffffff'))
+
     # Main sending loop.
     def start(self):
         seqno = 0    
-        msg = self.infile.read(Sender.MAX_DATA_SIZE)
+        data_size = self.calculate_data_size(seqno)
+
+        msg = self.infile.read(data_size)
         msg_type = None
 
         while seqno < self.WINDOW_SIZE and msg_type != 'end':
-            next_msg = self.infile.read(Sender.MAX_DATA_SIZE)
+            data_size = self.calculate_data_size(seqno + 1)
+            next_msg = self.infile.read(data_size)
             msg_type = self.get_message_type(seqno, next_msg)
             packet = self.make_packet(msg_type, seqno, msg)
             self.send(packet)
             self.window.append(packet)
-            print "sent: %s" % packet
             msg = next_msg
             seqno += 1
 
@@ -47,13 +60,14 @@ class Sender(BasicSender.BasicSender):
             self.handle_response(response)
             
             if msg_type != 'end':
-                while msg_type != end and len(self.window) < self.WINDOW_SIZE:
-                    next_msg = self.infile.read(Sender.MAX_DATA_SIZE)
+                while msg_type != 'end' and len(self.window) < self.WINDOW_SIZE:
+                    data_size = self.calculate_data_size(seqno + 1)
+                    next_msg = self.infile.read(data_size)
                     msg_type = self.get_message_type(seqno, next_msg)
-                    packet = self.make_packet(msg_type, seqno, next_msg)
+                    packet = self.make_packet(msg_type, seqno, msg)
                     self.send(packet)
                     self.window.append(packet)
-                    print "sent: %s" % packet
+                    msg = next_msg
                     seqno += 1
         self.infile.close()
 
@@ -72,7 +86,9 @@ class Sender(BasicSender.BasicSender):
                 self.send(packet)
 
     def handle_new_ack(self, ack):
-        if not Checksum.validate_checksum(ack):
+        # return msg_type, seqno, data, checksum
+        msg_type = self.split_packet(ack)[0]
+        if not Checksum.validate_checksum(ack) and msg_type != 'ack':
             return False
         else:
             ack_seq = str(int(self.split_packet(ack)[1]) - 1)
