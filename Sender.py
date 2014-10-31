@@ -62,40 +62,42 @@ class Sender(BasicSender.BasicSender):
 
     # Main sending loop.
     def start(self):
-        seqno = 0    
-        data_size = self.calculate_data_size(seqno)
+        if not sackMode:
+            seqno = 0
+            data_size = self.calculate_data_size(seqno)
 
-        msg = self.infile.read(data_size)
-        msg_type = None
+            msg = self.infile.read(data_size)
+            msg_type = None
 
-        # populating the window
-        while seqno < self.WINDOW_SIZE and msg_type != 'end':
-            data_size = self.calculate_data_size(seqno + 1)
-            next_msg = self.infile.read(data_size)
-            msg_type = self.get_message_type(seqno, next_msg)
-            packet = self.make_packet(msg_type, seqno, msg)
-            self.send(packet)
-            # (packet, is_acked) note that is_acked is a boolean indicating whether this packet has been acked
-            self.window.append((packet, False))
-            msg = next_msg
-            seqno += 1
+            # populating the window
+            while seqno < self.WINDOW_SIZE and msg_type != 'end':
+                data_size = self.calculate_data_size(seqno + 1)
+                next_msg = self.infile.read(data_size)
+                msg_type = self.get_message_type(seqno, next_msg)
+                packet = self.make_packet(msg_type, seqno, msg)
+                self.send(packet)
+                # (packet, is_acked) note that is_acked is a boolean indicating whether this packet has been acked
+                self.window.append((packet, False))
+                msg = next_msg
+                seqno += 1
 
 
-        while len(self.window) > 0:
-            response = self.receive(self.TIMEOUT)
-            self.handle_response(response)
-            if msg_type != 'end':
-                while msg_type != 'end' and len(self.window) < self.WINDOW_SIZE:
-                    data_size = self.calculate_data_size(seqno + 1)
-                    next_msg = self.infile.read(data_size)
-                    msg_type = self.get_message_type(seqno, next_msg)
-                    packet = self.make_packet(msg_type, seqno, msg)
-                    self.send(packet)
-                    self.window.append((packet, False))
-                    msg = next_msg
-                    seqno += 1
-        self.infile.close()
-
+            while len(self.window) > 0:
+                response = self.receive(self.TIMEOUT)
+                self.handle_response(response)
+                if msg_type != 'end':
+                    while msg_type != 'end' and len(self.window) < self.WINDOW_SIZE:
+                        data_size = self.calculate_data_size(seqno + 1)
+                        next_msg = self.infile.read(data_size)
+                        msg_type = self.get_message_type(seqno, next_msg)
+                        packet = self.make_packet(msg_type, seqno, msg)
+                        self.send(packet)
+                        self.window.append((packet, False))
+                        msg = next_msg
+                        seqno += 1
+            self.infile.close()
+        else:
+            print ("Implement SACKMODE here")
     def handle_response(self, response):
         if response:
             if not self.dup_ack or self.get_dup_seq() != self.get_ack_seq(response):
