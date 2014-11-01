@@ -113,7 +113,6 @@ class Sender(BasicSender.BasicSender):
             ack_seq = self.get_ack_seq(response)
             if not self.dup_ack or self.get_dup_seq() != ack_seq:
                 self.dup_ack = (ack_seq, 1)
-                self.SA_handle_response(response)
                 self.handle_new_ack(response)
             else:
                 self.dup_ack = (ack_seq, self.dup_ack[1] + 1) #what if we get packet with invalid checksum??
