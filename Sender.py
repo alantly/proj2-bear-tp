@@ -21,6 +21,7 @@ class Sender(BasicSender.BasicSender):
         super(Sender, self).__init__(dest, port, filename, debug)
         self.window = []
         self.dup_ack = None
+        self.delay = 0
         if sackMode:
             self.sa_window = []
 
@@ -94,6 +95,13 @@ class Sender(BasicSender.BasicSender):
 
         while len(self.window) > 0:
             response = self.receive(self.TIMEOUT)
+            if response:
+                self.delay = 0
+            else:
+                self.delay += self.TIMEOUT
+            if self.delay >= 10:
+                break
+
             self.handle_response(response)
             if msg_type != 'end':
                 while msg_type != 'end' and len(self.window) < self.WINDOW_SIZE:
@@ -109,17 +117,20 @@ class Sender(BasicSender.BasicSender):
 
     def handle_response(self, response):
         if response:
-            #print(response)
+            if not Checksum.validate_checksum(response):
+                return
             ack_seq = self.get_ack_seq(response)
             if not self.dup_ack or self.get_dup_seq() != ack_seq:
                 self.dup_ack = (ack_seq, 1)
+                self.SA_handle_response(response)
                 self.handle_new_ack(response)
             else:
-                self.dup_ack = (ack_seq, self.dup_ack[1] + 1) #what if we get packet with invalid checksum??
+                self.dup_ack = (ack_seq, self.dup_ack[1] + 1)
                 self.SA_handle_response(response)
                 self.handle_dup_ack(response)
         else:
             # send everything in the window if it's a timeout
+            self.log("Timeout")
             self.handle_timeout()
 
     def SA_handle_response(self,response):
@@ -160,8 +171,9 @@ class Sender(BasicSender.BasicSender):
     # only timeout will retransmit the packets after this point
     def handle_dup_ack(self, ack):
         if self.get_dup_count() == 4:
+            self.log("Dup_ack")
             if sackMode:
-                self.sa_handle_timeout()
+                self.handle_timeout()
             else:
                 self.send(self.get_first_packet_in_flight())
 
