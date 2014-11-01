@@ -13,7 +13,7 @@ class Sender(BasicSender.BasicSender):
     # -> out of range error ??
     # use attribute or Sender to check if it's in SACK mode or not from an ACK (on top of enableing the option)
 
-    MAX_DATA_SIZE = 1472
+    MAX_DATA_SIZE = 500#1472
     WINDOW_SIZE = 5
     TIMEOUT = 0.5
 
@@ -22,8 +22,6 @@ class Sender(BasicSender.BasicSender):
         self.window = []
         self.dup_ack = None
         self.delay = 0
-        if sackMode:
-            self.sa_window = []
 
     def get_message_type(self, seqno, next_msg):
         msg_type = 'data'
@@ -131,6 +129,7 @@ class Sender(BasicSender.BasicSender):
         else:
             # send everything in the window if it's a timeout
             self.log("Timeout")
+            self.dup_ack = None
             self.handle_timeout()
 
     def SA_handle_response(self,response):
@@ -159,7 +158,7 @@ class Sender(BasicSender.BasicSender):
 
     def handle_new_ack(self, ack):
         msg_type = self.split_packet(ack)[0]
-        if Checksum.validate_checksum(ack) and (msg_type == 'ack' or msg_type == 'sack'):
+        if (msg_type == 'ack' or msg_type == 'sack'):
             ack_seq = self.get_ack_seq(ack)
             # for easier computation
             ack_seq = str(int(ack_seq) - 1)
