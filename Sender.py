@@ -22,7 +22,7 @@ class Sender(BasicSender.BasicSender):
         self.window = []
         self.dup_ack = None
         if sackMode:
-            raise NotImplementedError #remove this line when you implement SACK
+            self.sa_window = []
 
     def get_message_type(self, seqno, next_msg):
         msg_type = 'data'
@@ -41,7 +41,12 @@ class Sender(BasicSender.BasicSender):
     def packets_in_flight(self):
         return [elem[0] for elem in self.window]
 
+    def sa_packets_in_flight(self):
+        return [elem[0] for elem in self.window if elem[1] == False]
+
     def get_ack_seq(self, ack):
+        if sackMode:
+            return self.get_cumul_ack(ack)
         return self.split_packet(ack)[1]
 
     def is_seq_in_flight(self, ack_seq):
@@ -60,9 +65,15 @@ class Sender(BasicSender.BasicSender):
     def get_dup_seq(self):
         return self.dup_ack[0]
 
+    def get_cumul_ack(self,ack):
+        return self.split_packet(ack)[1].split(';')[0]
+
+    def get_sel_ack(self,ack):
+        return self.split_packet(ack)[1].split(';')[1].split(',')
+
     # Main sending loop.
     def start(self):
-        seqno = 0    
+        seqno = 0
         data_size = self.calculate_data_size(seqno)
 
         msg = self.infile.read(data_size)
@@ -76,7 +87,7 @@ class Sender(BasicSender.BasicSender):
             packet = self.make_packet(msg_type, seqno, msg)
             self.send(packet)
             # (packet, is_acked) note that is_acked is a boolean indicating whether this packet has been acked
-            self.window.append((packet, False))
+            self.window.append([packet, False])
             msg = next_msg
             seqno += 1
 
@@ -91,30 +102,54 @@ class Sender(BasicSender.BasicSender):
                     msg_type = self.get_message_type(seqno, next_msg)
                     packet = self.make_packet(msg_type, seqno, msg)
                     self.send(packet)
-                    self.window.append((packet, False))
+                    self.window.append([packet, False])
                     msg = next_msg
                     seqno += 1
         self.infile.close()
 
     def handle_response(self, response):
         if response:
-            if not self.dup_ack or self.get_dup_seq() != self.get_ack_seq(response):
-                self.dup_ack = (self.get_ack_seq(response), 1)
+            #print(response)
+            ack_seq = self.get_ack_seq(response)
+            if not self.dup_ack or self.get_dup_seq() != ack_seq:
+                self.dup_ack = (ack_seq, 1)
+                self.SA_handle_response(response)
                 self.handle_new_ack(response)
             else:
-                self.dup_ack = (self.get_ack_seq(response), self.dup_ack[1] + 1)
+                self.dup_ack = (ack_seq, self.dup_ack[1] + 1) #what if we get packet with invalid checksum??
+                self.SA_handle_response(response)
                 self.handle_dup_ack(response)
         else:
             # send everything in the window if it's a timeout
             self.handle_timeout()
 
+    def SA_handle_response(self,response):
+        if sackMode:
+            cumul_ack = self.get_cumul_ack(response)
+            sel_ack = self.get_sel_ack(response)
+            sel_ack.append(str(int(cumul_ack) - 1))
+            for elem in self.window:
+                if self.get_ack_seq(self.get_pkt_from_wind_elem(elem)) in sel_ack:
+                    self.set_sa_found(elem)
+            #self.print_win_ack()
+
+    def print_win_ack(self):
+        print([(self.get_cumul_ack(elem[0]),elem[1]) for elem in self.window])
+
+    def set_sa_found(self,elem):
+        if not elem[1]:
+            elem[1] = True
+
+    def get_pkt_from_wind_elem(self,elem):
+        return elem[0]
+
     def handle_timeout(self):
-        for packet in self.packets_in_flight():
-                self.send(packet)
+        for packet in self.sa_packets_in_flight():
+            self.send(packet)
 
     def handle_new_ack(self, ack):
         msg_type = self.split_packet(ack)[0]
-        if Checksum.validate_checksum(ack) and msg_type == 'ack':
+        if Checksum.validate_checksum(ack) and (msg_type == 'ack' or msg_type == 'sack'):
             ack_seq = self.get_ack_seq(ack)
             # for easier computation
             ack_seq = str(int(ack_seq) - 1)
@@ -126,7 +161,10 @@ class Sender(BasicSender.BasicSender):
     # only timeout will retransmit the packets after this point
     def handle_dup_ack(self, ack):
         if self.get_dup_count() == 4:
-            self.send(self.get_first_packet_in_flight)
+            if sackMode:
+                self.sa_handle_timeout()
+            else:
+                self.send(self.get_first_packet_in_flight())
 
     def log(self, msg):
         if self.debug:
