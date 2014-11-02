@@ -13,7 +13,7 @@ class Sender(BasicSender.BasicSender):
     # -> out of range error ??
     # use attribute or Sender to check if it's in SACK mode or not from an ACK (on top of enableing the option)
 
-    MAX_DATA_SIZE = 500#1472
+    MAX_DATA_SIZE = 1472
     WINDOW_SIZE = 5
     TIMEOUT = 0.5
 
@@ -98,6 +98,7 @@ class Sender(BasicSender.BasicSender):
             else:
                 self.delay += self.TIMEOUT
             if self.delay >= 10:
+                self.log("10s Timeout. Terminating Connection.")
                 break
 
             self.handle_response(response)
@@ -116,6 +117,7 @@ class Sender(BasicSender.BasicSender):
     def handle_response(self, response):
         if response:
             if not Checksum.validate_checksum(response):
+                self.log("Invalid checksum")
                 return
             ack_seq = self.get_ack_seq(response)
             if not self.dup_ack or self.get_dup_seq() != ack_seq:
@@ -165,6 +167,9 @@ class Sender(BasicSender.BasicSender):
             if self.is_seq_in_flight(ack_seq):
                 while len(self.window) > 0 and int(self.get_first_elem_ack()) <= int(ack_seq):
                     self.window.pop(0)
+        else:
+            self.log("invalid ack")
+
 
     # fast retransmission only occurs at the fourth packet
     # only timeout will retransmit the packets after this point
