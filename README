@@ -1,6 +1,8 @@
 CS 168 Fall 2014
 Project 2
 
+Note: Code is on sliding-window branch file Sender.py
+
 In this folder you'll find the sample receiver, code for computing and
 validating checksums, as well as example sender code.
 
